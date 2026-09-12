@@ -156,10 +156,34 @@ class HUDRenderer:
         s = seconds % 60
         return f"{m:02d}:{s:02d}"
 
+    def draw_rotated_bar(self, img, bar_w: int, bar_h: int, dest_x: int, dest_y: int,
+                         bg_color, draw_content_fn, is_inverted: bool):
+        """
+        在画面指定区域绘制条带内容。当处于倒装模式 (is_inverted=True) 时，
+        在条带缓冲画布上绘制正向文字后整体旋转 180° 贴回图像，
+        确保在物理倒立的屏幕上，驾驶员肉眼看到的文字 100% 正立、无任何镜像颠倒！
+        """
+        try:
+            from maix import image as m_image
+            has_maix_image = hasattr(m_image, "Image") and hasattr(img, "draw_image")
+        except Exception:
+            has_maix_image = False
+
+        if not is_inverted or not has_maix_image:
+            img.draw_rect(dest_x, dest_y, bar_w, bar_h, color=bg_color, thickness=-1)
+            draw_content_fn(img, dest_x, dest_y)
+        else:
+            bar = m_image.Image(bar_w, bar_h, m_image.Format.FMT_RGB888)
+            bar.draw_rect(0, 0, bar_w, bar_h, color=bg_color, thickness=-1)
+            draw_content_fn(bar, 0, 0)
+            bar_rot = bar.rotate(180)
+            img.draw_image(dest_x, dest_y, bar_rot)
+
     def render_hud(self, img, tracks: dict, alerts: list, is_recording: bool = True,
                    is_locked: bool = False, rec_seconds: int = 0, temp_c: int = 45,
                    total_g: float = 1.0, snap_count: int = 0, yaw_rate_dps: float = 0.0,
-                   road_res = None, horizon_y: int = None, acc_y: float = 9.8, gravity_direction: str = "DOWN"):
+                   road_res = None, horizon_y: int = None, acc_y: float = 9.8,
+                   gravity_direction: str = "DOWN", is_inverted: bool = False):
         """
         在画面上绘制高对比度暗黑 ADAS HUD。
         :param img: maix.image.Image 或 Mock 绘图对象
@@ -176,6 +200,7 @@ class HUDRenderer:
         :param horizon_y: 自适应动态地平线纵坐标 (像素)
         :param acc_y: IMU 实时 Y 轴重力加速度 (m/s²)
         :param gravity_direction: 重力朝向 (DOWN / UP)
+        :param is_inverted: 相机是否处于倒装/吊装姿态 (True 时 HUD 整体模块自动旋转适配物理屏幕)
         """
         # 1. 绘制前向主车道 ROI 参考引导框 (轻量淡蓝色角标)
         roi_x = int(self.config.IMG_WIDTH * self.config.ROI_X_MIN_RATIO)
@@ -222,14 +247,14 @@ class HUDRenderer:
         # 5. 顶部全局紧急碰撞警报横幅 (如果有 CRITICAL 告警)
         has_critical = any(a["level"] == AlertLevel.CRITICAL for a in alerts)
         if has_critical:
-            # 顶部闪烁高亮红色警告横幅
-            img.draw_rect(120, 30, 400, 36, color=self.COLOR_CRITICAL, thickness=-1)
-            img.draw_string(140, 38, "CRITICAL: COLLISION ALERT! BRAKE!", color=self.COLOR_WHITE, scale=1.3)
+            banner_y = 30 if not is_inverted else self.config.IMG_HEIGHT - 66
+            def draw_critical_content(target, ox, oy):
+                target.draw_string(ox + 20, oy + 8, "CRITICAL: COLLISION ALERT! BRAKE!", color=self.COLOR_WHITE, scale=1.3)
+            self.draw_rotated_bar(img, 400, 36, 120, banner_y, self.COLOR_CRITICAL, draw_critical_content, is_inverted)
 
-        # 6. 顶部状态栏 (录像状态、加锁状态、中央版本徽章、温度与 G 值)
-        img.draw_rect(0, 0, self.config.IMG_WIDTH, 32, color=self.COLOR_DARK_BG, thickness=-1)
-
-        # 左侧录像指示器
+        # 6. 状态顶栏 (录像状态、加锁状态、中央版本徽章、温度与 G 值)
+        # 在正装模式下位于图像 y=0~32；在倒装模式下位于图像 y=H-32~H (对应肉眼物理屏幕上方)
+        status_bar_y = 0 if not is_inverted else self.config.IMG_HEIGHT - 32
         rec_time_str = self.format_duration(rec_seconds)
         if is_locked:
             rec_status = f"REC [LOCKED] ({rec_time_str})"
@@ -241,20 +266,25 @@ class HUDRenderer:
             rec_status = "REC [PAUSED]"
             rec_color = self.COLOR_WHITE
 
-        img.draw_string(10, 8, rec_status, color=rec_color, scale=1.0)
-
-        # 中央版本徽章
-        if not has_critical:
-            ver_text = f"Camp Dashcam {self.config.APP_VERSION}"
-            img.draw_string(240, 8, ver_text, color=self.COLOR_CYAN, scale=1.0)
-
-        # 右侧芯片温度与 IMU G 值
+        ver_text = f"Camp Dashcam {self.config.APP_VERSION}" if not has_critical else ""
         status_right = f"G:{total_g:.2f}G | SoC:{temp_c}C"
-        img.draw_string(self.config.IMG_WIDTH - 190, 8, status_right, color=self.COLOR_WHITE, scale=1.0)
+
+        def draw_status_content(target, ox, oy):
+            target.draw_string(ox + 10, oy + 8, rec_status, color=rec_color, scale=1.0)
+            if ver_text:
+                target.draw_string(ox + 240, oy + 8, ver_text, color=self.COLOR_CYAN, scale=1.0)
+            target.draw_string(ox + self.config.IMG_WIDTH - 190, oy + 8, status_right, color=self.COLOR_WHITE, scale=1.0)
+
+        self.draw_rotated_bar(img, self.config.IMG_WIDTH, 32, 0, status_bar_y, self.COLOR_DARK_BG, draw_status_content, is_inverted)
 
         # 7. 底部信息条 (抓拍统计与退出触摸区域)
-        img.draw_rect(0, self.config.IMG_HEIGHT - 26, self.config.IMG_WIDTH, 26, color=self.COLOR_DARK_BG, thickness=-1)
-        img.draw_string(10, self.config.IMG_HEIGHT - 20, f"Snaps: {snap_count}  |  ROI: Main Lane", color=self.COLOR_WHITE, scale=0.9)
-        img.draw_string(self.config.IMG_WIDTH - 85, self.config.IMG_HEIGHT - 20, "[ Exit ]", color=self.COLOR_WARNING, scale=0.9)
+        # 在正装模式下位于图像 y=H-26~H；在倒装模式下位于图像 y=0~26 (对应肉眼物理屏幕下方)
+        info_bar_y = self.config.IMG_HEIGHT - 26 if not is_inverted else 0
+
+        def draw_info_content(target, ox, oy):
+            target.draw_string(ox + 10, oy + 6, f"Snaps: {snap_count}  |  ROI: Main Lane", color=self.COLOR_WHITE, scale=0.9)
+            target.draw_string(ox + self.config.IMG_WIDTH - 85, oy + 6, "[ Exit ]", color=self.COLOR_WARNING, scale=0.9)
+
+        self.draw_rotated_bar(img, self.config.IMG_WIDTH, 26, 0, info_bar_y, self.COLOR_DARK_BG, draw_info_content, is_inverted)
 
 

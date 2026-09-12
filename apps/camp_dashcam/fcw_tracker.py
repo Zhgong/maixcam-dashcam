@@ -33,7 +33,8 @@ class OrientationDetector:
     负责基于 3 轴重力加速度实时识别重力方向并确定画面物理底部。
     具备启动零值过滤、EMA滑动滤波与迟滞防抖区间。
     """
-    def __init__(self, ema_alpha: float = 0.25, threshold: float = 2.5):
+    def __init__(self, ema_alpha: float = 0.25, threshold: float = 2.5, config=DashcamConfig):
+        self.config = config
         self.ema_alpha = ema_alpha
         self.threshold = threshold
         self.smooth_ay = 9.8  # 默认正常直立正放
@@ -42,11 +43,39 @@ class OrientationDetector:
         self.bottom_edge = BottomEdge.IMAGE_BOTTOM
         self.has_valid_sample = False
 
+        # 初始化时读取强制安装模式配置
+        mount_mode = getattr(self.config, "MOUNT_MODE", "auto")
+        if mount_mode == "inverted":
+            self.is_inverted = True
+            self.gravity_direction = GravityDirection.UP
+            self.bottom_edge = BottomEdge.IMAGE_TOP
+            self.smooth_ay = -9.8
+        elif mount_mode == "upright":
+            self.is_inverted = False
+            self.gravity_direction = GravityDirection.DOWN
+            self.bottom_edge = BottomEdge.IMAGE_BOTTOM
+            self.smooth_ay = 9.8
+
     def update(self, acc_x: float, acc_y: float, acc_z: float) -> bool:
         """
         输入实时加速度计数据，更新重力方向与底部判定。
         :return: bool, 朝向是否发生切换 (changed)
         """
+        mount_mode = getattr(self.config, "MOUNT_MODE", "auto")
+        if mount_mode == "inverted":
+            old_inv = self.is_inverted
+            self.is_inverted = True
+            self.gravity_direction = GravityDirection.UP
+            self.bottom_edge = BottomEdge.IMAGE_TOP
+            return old_inv != self.is_inverted
+        elif mount_mode == "upright":
+            old_inv = self.is_inverted
+            self.is_inverted = False
+            self.gravity_direction = GravityDirection.DOWN
+            self.bottom_edge = BottomEdge.IMAGE_BOTTOM
+            return old_inv != self.is_inverted
+
+        # auto 模式: 基于 3 轴重力加速度实时识别重力方向并确定画面物理底部
         # 1. 过滤无效/未就绪的零值数据或失重状态
         norm_sq = acc_x**2 + acc_y**2 + acc_z**2
         if norm_sq < 10.0:  # < ~1G 的 1/3，视作传感器未稳定或自由落体
@@ -67,7 +96,7 @@ class OrientationDetector:
             self.gravity_direction = GravityDirection.DOWN
             self.bottom_edge = BottomEdge.IMAGE_BOTTOM
         elif self.smooth_ay < -self.threshold:
-            # 相机处于倒放吊装姿态 (acc_y < -2.5 m/s²)，物理底部对应图像顶部，触发 180° 翻转纠偏保持正向
+            # 相机处于倒放吊装姿态 (acc_y < -2.5 m/s²)，物理底部对应图像顶部，触发 HUD 翻转保持正向
             self.is_inverted = True
             self.gravity_direction = GravityDirection.UP
             self.bottom_edge = BottomEdge.IMAGE_TOP

@@ -293,7 +293,8 @@ def main(disp_handle=None):
                 road_res=road_res,
                 horizon_y=int(fcw_analyzer.current_horizon_y),
                 acc_y=orientation_detector.smooth_ay,
-                gravity_direction=orientation_detector.gravity_direction
+                gravity_direction=orientation_detector.gravity_direction,
+                is_inverted=is_inverted
             )
 
             if active_disp and img:

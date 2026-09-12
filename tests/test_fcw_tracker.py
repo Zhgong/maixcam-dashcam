@@ -288,6 +288,34 @@ class TestFCWTracker(unittest.TestCase):
         self.assertEqual(detector.gravity_direction, GravityDirection.DOWN)
         self.assertEqual(detector.bottom_edge, BottomEdge.IMAGE_BOTTOM)
 
+    def test_orientation_detector_forced_modes(self):
+        """
+        验证 MOUNT_MODE = 'inverted' 或 'upright' 强制模式下忽略 IMU 扰动。
+        """
+        class InvertedConfig:
+            MOUNT_MODE = "inverted"
+
+        class UprightConfig:
+            MOUNT_MODE = "upright"
+
+        # 强制倒装
+        det_inv = OrientationDetector(config=InvertedConfig)
+        self.assertTrue(det_inv.is_inverted)
+        self.assertEqual(det_inv.gravity_direction, GravityDirection.UP)
+        # 即使输入正放加速度，也保持倒装锁定
+        changed = det_inv.update(0.0, 9.8, 0.0)
+        self.assertFalse(changed)
+        self.assertTrue(det_inv.is_inverted)
+
+        # 强制正装
+        det_up = OrientationDetector(config=UprightConfig)
+        self.assertFalse(det_up.is_inverted)
+        self.assertEqual(det_up.gravity_direction, GravityDirection.DOWN)
+        # 即使输入倒挂加速度，也保持正装锁定
+        changed = det_up.update(0.0, -9.8, 0.0)
+        self.assertFalse(changed)
+        self.assertFalse(det_up.is_inverted)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -6,6 +6,9 @@ class DashcamConfig:
     APP_NAME = "camp_dashcam"
     APP_VERSION = "v1.3.0"
 
+    # 相机安装朝向与 HUD 模式: "auto" (自动由 IMU 识别), "upright" (强制正装), "inverted" (强制倒装)
+    MOUNT_MODE = "auto"
+
     # 真实道路表面与车道边缘检测 (Real Road Perception)
     ROAD_DETECTION_ENABLED = True
     ROAD_CONFIDENCE_THRESHOLD = 0.35
