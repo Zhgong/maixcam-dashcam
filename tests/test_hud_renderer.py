@@ -152,6 +152,41 @@ class TestHUDRenderer(unittest.TestCase):
         )
         self.assertTrue(mock_img.draw_line.called)
 
+    def test_target_box_inverted_mapping(self):
+        """
+        [Phase 2 Quality Gate: 无论正装或倒装，目标框与实际图像直接 1:1 物理对齐断言]
+        验证无论 is_inverted 为 False 还是 True：
+        目标框 [x=100, y=200, w=50, h=80] 均必须 1:1 绘制在原生坐标 (100, 200, 50, 80)，
+        确保框与画面中的物理目标完全重合，消除左右颠倒错位！
+        """
+        mock_img = MagicMock()
+        target = FCWTarget(track_id=1, class_id=DashcamConfig.TARGET_CAR, bbox=[100, 200, 50, 80], distance_m=25.0, timestamp=100.0)
+
+        # 1. 正装调用
+        self.renderer.render_hud(
+            img=mock_img,
+            tracks={1: target},
+            alerts=[],
+            is_inverted=False
+        )
+        rect_calls = [c[0] for c in mock_img.draw_rect.call_args_list if c[0][0] == 100 and c[0][1] == 200]
+        self.assertEqual(len(rect_calls), 1, "正装模式下目标框必须精准绘制在 (100, 200)！")
+        self.assertEqual(rect_calls[0][2], 50)
+        self.assertEqual(rect_calls[0][3], 80)
+
+        # 2. 倒装调用
+        mock_img.reset_mock()
+        self.renderer.render_hud(
+            img=mock_img,
+            tracks={1: target},
+            alerts=[],
+            is_inverted=True
+        )
+        inverted_rect_calls = [c[0] for c in mock_img.draw_rect.call_args_list if c[0][0] == 100 and c[0][1] == 200]
+        self.assertEqual(len(inverted_rect_calls), 1, "倒装模式下目标框也必须直接 1:1 绘制在 (100, 200) 紧贴实际目标！")
+        self.assertEqual(inverted_rect_calls[0][2], 50)
+        self.assertEqual(inverted_rect_calls[0][3], 80)
+
 
 if __name__ == '__main__':
     unittest.main()

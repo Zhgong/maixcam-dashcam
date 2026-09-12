@@ -179,6 +179,35 @@ class HUDRenderer:
             bar_rot = bar.rotate(180)
             img.draw_image(dest_x, dest_y, bar_rot)
 
+    def draw_rotated_text(self, img, text: str, dest_x: int, dest_y: int,
+                          color, scale: float = 1.0, is_inverted: bool = False, bg_color=None):
+        """
+        在指定位置绘制文字标签。若处于倒装模式 (is_inverted=True)，
+        自动测量文字尺寸并旋转 180° 贴回，保证物理屏幕上文字 100% 正向可读。
+        """
+        try:
+            from maix import image as m_image
+            has_maix = hasattr(m_image, "string_size") and hasattr(img, "draw_image")
+        except Exception:
+            has_maix = False
+
+        if not is_inverted or not has_maix:
+            if bg_color is not None:
+                approx_w = int(len(text) * 10 * scale)
+                approx_h = int(18 * scale)
+                img.draw_rect(dest_x, dest_y, approx_w, approx_h, color=bg_color, thickness=-1)
+            img.draw_string(dest_x, dest_y, text, color=color, scale=scale)
+        else:
+            sz = m_image.string_size(text, scale=scale)
+            tw = max(10, sz.width() + 6)
+            th = max(10, sz.height() + 4)
+            badge_canvas = m_image.Image(tw, th, m_image.Format.FMT_RGB888)
+            if bg_color is not None:
+                badge_canvas.draw_rect(0, 0, tw, th, color=bg_color, thickness=-1)
+            badge_canvas.draw_string(2, 2, text, color=color, scale=scale)
+            badge_rot = badge_canvas.rotate(180)
+            img.draw_image(dest_x, dest_y, badge_rot)
+
     def render_hud(self, img, tracks: dict, alerts: list, is_recording: bool = True,
                    is_locked: bool = False, rec_seconds: int = 0, temp_c: int = 45,
                    total_g: float = 1.0, snap_count: int = 0, yaw_rate_dps: float = 0.0,
@@ -216,7 +245,7 @@ class HUDRenderer:
         # 3. 绘制虚拟车道透视安全地毯 (Lane Corridor Envelope, 支持动态弯道随动)
         self.render_lane_corridor(img, alerts, yaw_rate_dps=yaw_rate_dps)
 
-        # 4. 绘制每个被跟踪目标与距离/TTC 徽标
+        # 4. 绘制每个被跟踪目标与距离/TTC 徽标 (支持倒装模式下整体旋转与文字正向)
         for t_id, target in tracks.items():
             x, y, w, h = target.bbox
             cls_name = self.CLASS_NAMES.get(target.class_id, "Obj")
@@ -240,9 +269,21 @@ class HUDRenderer:
                 badge_text = f"[#{t_id}] {cls_name} {dist_str}{corridor_tag}"
                 thickness = 1
 
-            img.draw_rect(int(x), int(y), int(w), int(h), color=box_color, thickness=thickness)
-            label_y = max(10, int(y) - 18)
-            img.draw_string(int(x), label_y, badge_text, color=box_color, scale=1.0)
+            # 无论正装或倒装，YOLO 检测框与图像中的目标物理位置直接 1:1 重合，无需转换框坐标
+            draw_x = int(x)
+            draw_y = int(y)
+            draw_w = int(w)
+            draw_h = int(h)
+            img.draw_rect(draw_x, draw_y, draw_w, draw_h, color=box_color, thickness=thickness)
+
+            if not is_inverted:
+                # 正装模式：文字标签绘制在目标框上方
+                label_y = max(10, draw_y - 18)
+                self.draw_rotated_text(img, badge_text, draw_x, label_y, color=box_color, scale=1.0, is_inverted=False)
+            else:
+                # 倒装模式：在物理倒立屏幕上，物理“上方”对应图像中的“下方” (draw_y + draw_h + 2)
+                label_y = min(self.config.IMG_HEIGHT - 22, draw_y + draw_h + 2)
+                self.draw_rotated_text(img, badge_text, draw_x, label_y, color=box_color, scale=1.0, is_inverted=True, bg_color=self.COLOR_DARK_BG)
 
         # 5. 顶部全局紧急碰撞警报横幅 (如果有 CRITICAL 告警)
         has_critical = any(a["level"] == AlertLevel.CRITICAL for a in alerts)
