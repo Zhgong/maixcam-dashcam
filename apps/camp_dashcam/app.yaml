@@ -1,0 +1,19 @@
+id: camp_dashcam
+name: Camp Dashcam
+name[zh]: 车载AI记录仪与碰撞预警
+version: 1.3.0
+icon: assets/icon.png
+author: Zhou
+desc: AI Dashcam & FCW (Forward Collision Warning) Guard with IMU Collision Lock
+desc[zh]: 基于 1.0 TOPS NPU 实时车辆/行人识别、单目测距 TTC 碰撞预警与 G-Sensor 碰撞加锁的车载 AI 记录仪
+files:
+  - app.yaml
+  - assets
+  - main.py
+  - config.py
+  - fcw_tracker.py
+  - g_sensor_guard.py
+  - storage_manager.py
+  - hud_renderer.py
+  - road_detector.py
+
