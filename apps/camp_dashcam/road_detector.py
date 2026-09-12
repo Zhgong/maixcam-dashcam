@@ -57,13 +57,15 @@ class RoadDetector:
         self,
         img: np.ndarray,
         horizon_y: int = 300,
-        imu_yaw_rate: float = 0.0
+        imu_yaw_rate: float = 0.0,
+        is_inverted: bool = False
     ) -> RoadDetectionResult:
         """
         从单帧车载前视图像中提取实际物理路面左右边界。
         :param img: 输入图像 (H, W, 3) BGR/RGB 或 (H, W) 灰度图
         :param horizon_y: 动态自标定地平线高度 (低于此高度才为路面)
         :param imu_yaw_rate: 偏航角速度 (deg/s)
+        :param is_inverted: 相机是否倒装 (True 时路面在图像上方)
         :return: RoadDetectionResult
         """
         if img is None or img.size == 0:
@@ -83,9 +85,15 @@ class RoadDetector:
         if std_val < 8.0 or mean_val < 5.0 or mean_val > 250.0:
             return RoadDetectionResult(detected=False, confidence=0.0)
 
-        # 2. 提取路面 ROI (地平线下沿至图像车盖前沿)，过滤引擎盖反射，大幅提升板端边缘计算帧率
-        roi_top = horizon_y
-        roi_bottom = min(h - 15, int(h * 0.92))
+        # 2. 提取路面 ROI (正装时：地平线下沿至图像底部车盖前；倒装时：图像顶部车盖前至地平线上沿)
+        if not is_inverted:
+            roi_top = horizon_y
+            roi_bottom = min(h - 15, int(h * 0.92))
+        else:
+            eff_horizon = h - 1 - horizon_y
+            roi_top = max(15, int(h * 0.08))
+            roi_bottom = max(roi_top + 30, eff_horizon)
+
         roi_gray = gray[roi_top:roi_bottom, :]
         roi_h = roi_bottom - roi_top
 
@@ -129,8 +137,12 @@ class RoadDetector:
             col_edges = np.sum(strip_edges, axis=0)
 
             # 透视收敛预期搜索区间: 越接近地平线，道路在画面中心收敛越窄
-            ratio = (y - roi_top) / max(1.0, (roi_bottom - roi_top))  # 1.0 at bottom, 0.0 at top
-            expected_lane_half_w = 40 + int(ratio * 180)  # 顶部约 40px 半宽，底部约 220px 半宽
+            if not is_inverted:
+                ratio = (y - roi_top) / max(1.0, (roi_bottom - roi_top))  # 1.0 at bottom (near), 0.0 at top (far)
+            else:
+                ratio = (roi_bottom - y) / max(1.0, (roi_bottom - roi_top)) # 1.0 at top (near), 0.0 at bottom (far)
+
+            expected_lane_half_w = 40 + int(ratio * 180)  # 远端约 40px 半宽，近端约 220px 半宽
             curr_center = int(cx + center_shift * (1.0 - ratio))
 
             left_search_min = max(10, curr_center - expected_lane_half_w - 90)
@@ -178,7 +190,7 @@ class RoadDetector:
         if valid_left and not valid_right:
             right_pts = []
             for lx, ly in left_pts:
-                r = (ly - roi_top) / max(1.0, (roi_bottom - roi_top))
+                r = (ly - roi_top) / max(1.0, (roi_bottom - roi_top)) if not is_inverted else (roi_bottom - ly) / max(1.0, (roi_bottom - roi_top))
                 w_est = int(default_lane_w_top + r * (default_lane_w_bottom - default_lane_w_top))
                 rx = min(w - 10, lx + w_est)
                 right_pts.append((rx, ly))
@@ -186,7 +198,7 @@ class RoadDetector:
         elif valid_right and not valid_left:
             left_pts = []
             for rx, ry in right_pts:
-                r = (ry - roi_top) / max(1.0, (roi_bottom - roi_top))
+                r = (ry - roi_top) / max(1.0, (roi_bottom - roi_top)) if not is_inverted else (roi_bottom - ry) / max(1.0, (roi_bottom - roi_top))
                 w_est = int(default_lane_w_top + r * (default_lane_w_bottom - default_lane_w_top))
                 lx = max(10, rx - w_est)
                 left_pts.append((lx, ry))
@@ -196,17 +208,20 @@ class RoadDetector:
         left_pts = self._smooth_curve_points(left_pts)
         right_pts = self._smooth_curve_points(right_pts)
 
-        # 排序点集确保从底部 (y 大) 到远端 (y 小)
-        left_pts.sort(key=lambda p: -p[1])
-        right_pts.sort(key=lambda p: -p[1])
-
+        # 排序点集确保从物理近端到物理远端
+        if not is_inverted:
+            left_pts.sort(key=lambda p: -p[1])
+            right_pts.sort(key=lambda p: -p[1])
+        else:
+            left_pts.sort(key=lambda p: p[1])
+            right_pts.sort(key=lambda p: p[1])
 
         # 几何收敛性合理度校验
-        # 底部宽度应大于顶部宽度
-        w_bottom = right_pts[0][0] - left_pts[0][0]
-        w_top = right_pts[-1][0] - left_pts[-1][0]
+        # 物理近端宽度应大于物理远端宽度
+        w_near = right_pts[0][0] - left_pts[0][0]
+        w_far = right_pts[-1][0] - left_pts[-1][0]
 
-        if w_bottom <= 40 or w_top <= 10 or w_bottom < w_top:
+        if w_near <= 40 or w_far <= 10 or w_near < w_far:
             return RoadDetectionResult(detected=False, confidence=0.2)
 
         # 计算置信度

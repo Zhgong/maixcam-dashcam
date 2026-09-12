@@ -58,7 +58,7 @@ class HUDRenderer:
         self.z_near = getattr(config, "CORRIDOR_Z_NEAR_M", 3.5)
         self.z_far = getattr(config, "CORRIDOR_Z_FAR_M", 25.0)
 
-    def render_actual_road(self, img, road_res):
+    def render_actual_road(self, img, road_res, is_inverted: bool = False):
         """
         绘制从实际路面图像中提取出的物理车道标线与沥青路缘多段线 (Real Road Boundaries)。
         """
@@ -81,16 +81,22 @@ class HUDRenderer:
                 p1, p2 = right_pts[i], right_pts[i + 1]
                 img.draw_line(p1[0], p1[1], p2[0], p2[1], color=road_color, thickness=3)
 
-        # 3. 标识当前道路感知状态徽章
+        # 3. 标识当前道路感知状态徽章 (支持倒装模式下正立防镜像绘制)
         if left_pts and right_pts:
             tag_x = int(left_pts[0][0] + (right_pts[0][0] - left_pts[0][0]) / 2.0 - 50)
             tag_y = min(self.img_h - 35, max(left_pts[0][1], right_pts[0][1]) - 15)
             road_type_tag = "LANE" if getattr(road_res, "road_type", "") == "painted_lanes" else "ROAD"
             conf_pct = int(road_res.confidence * 100)
-            img.draw_string(max(10, tag_x), tag_y, f"[{road_type_tag} {conf_pct}%]", color=road_color, scale=0.8)
+            tag_text = f"[{road_type_tag} {conf_pct}%]"
+            self.draw_rotated_text(img, tag_text, max(10, tag_x), tag_y, color=road_color, scale=0.8, is_inverted=is_inverted, bg_color=self.COLOR_DARK_BG if is_inverted else None)
 
-    def project_ground_point(self, x_m: float, z_m: float, yaw_rate_dps: float = 0.0):
-        """将地面物理坐标 (X_m, Z_m) 透视投影至屏幕像素坐标 (px, py)，支持动态转弯曲率偏移"""
+    def project_ground_point(self, x_m: float, z_m: float, yaw_rate_dps: float = 0.0, is_inverted: bool = False):
+        """
+        将地面物理坐标 (X_m, Z_m) 透视投影至屏幕像素坐标 (px, py)，支持动态转弯曲率偏移。
+        当处于倒装模式 (is_inverted=True) 时，由于镜头感光元件物理倒置，
+        实际物理路面出现在图像上方 (y=0~240)，因此在投影计算后自适应镜像纵坐标 (img_h - 1 - py)，
+        确保在倒立的物理屏幕上，车道地毯精确出现在驾驶员肉眼所见的屏幕下半部！
+        """
         if z_m <= 0.1:
             return int(self.cx), int(self.cy)
 
@@ -113,13 +119,17 @@ class HUDRenderer:
         px = int(self.cx + dx)
         px = max(-200, min(self.img_w + 200, px))
         py = max(0, min(self.img_h - 1, py))
+
+        if is_inverted:
+            py = int(self.img_h - 1 - py)
+
         return px, py
 
-    def render_lane_corridor(self, img, alerts: list, yaw_rate_dps: float = 0.0):
+    def render_lane_corridor(self, img, alerts: list, yaw_rate_dps: float = 0.0, is_inverted: bool = False):
         """
         绘制虚拟车道透视安全地毯包络线 (Virtual Lane Carpet)。
         支持基于偏航角速度 (yaw_rate_dps) 的平滑动态转弯随动弧线。
-        并在 5m, 10m, 20m 处绘制安全距离刻度横梁。
+        并在 5m, 10m, 20m 处绘制安全距离刻度横梁与正立标签。
         """
         # 判断当前是否有碰撞告警，动态切换地毯高亮颜色
         if any(a["level"] == AlertLevel.CRITICAL for a in alerts):
@@ -133,8 +143,8 @@ class HUDRenderer:
 
         # 动态弯道采用多段线采样拟合平滑弧线
         z_steps = [self.z_near, 5.0, 7.5, 11.0, 16.0, 21.0, self.z_far]
-        pts_left = [self.project_ground_point(-w_half, z, yaw_rate_dps) for z in z_steps]
-        pts_right = [self.project_ground_point(w_half, z, yaw_rate_dps) for z in z_steps]
+        pts_left = [self.project_ground_point(-w_half, z, yaw_rate_dps, is_inverted=is_inverted) for z in z_steps]
+        pts_right = [self.project_ground_point(w_half, z, yaw_rate_dps, is_inverted=is_inverted) for z in z_steps]
 
         # 1. 绘制左右分段多段线
         for i in range(len(z_steps) - 1):
@@ -144,10 +154,14 @@ class HUDRenderer:
         # 2. 绘制安全距离梯级横梁 (5m, 10m, 20m)
         for dist_tick in [5.0, 10.0, 20.0]:
             if self.z_near <= dist_tick <= self.z_far:
-                lx, ly = self.project_ground_point(-w_half, dist_tick, yaw_rate_dps)
-                rx, ry = self.project_ground_point(w_half, dist_tick, yaw_rate_dps)
+                lx, ly = self.project_ground_point(-w_half, dist_tick, yaw_rate_dps, is_inverted=is_inverted)
+                rx, ry = self.project_ground_point(w_half, dist_tick, yaw_rate_dps, is_inverted=is_inverted)
                 img.draw_line(lx, ly, rx, ry, color=line_color, thickness=1)
-                img.draw_string(rx + 4, ly - 7, f"{int(dist_tick)}m", color=line_color, scale=0.7)
+                tick_str = f"{int(dist_tick)}m"
+                if not is_inverted:
+                    img.draw_string(rx + 4, ly - 7, tick_str, color=line_color, scale=0.7)
+                else:
+                    self.draw_rotated_text(img, tick_str, rx + 4, ly + 2, color=line_color, scale=0.7, is_inverted=True)
 
     @staticmethod
     def format_duration(seconds: int) -> str:
@@ -202,8 +216,8 @@ class HUDRenderer:
             tw = max(10, sz.width() + 6)
             th = max(10, sz.height() + 4)
             badge_canvas = m_image.Image(tw, th, m_image.Format.FMT_RGB888)
-            if bg_color is not None:
-                badge_canvas.draw_rect(0, 0, tw, th, color=bg_color, thickness=-1)
+            fill_bg = bg_color if bg_color is not None else self.COLOR_DARK_BG
+            badge_canvas.draw_rect(0, 0, tw, th, color=fill_bg, thickness=-1)
             badge_canvas.draw_string(2, 2, text, color=color, scale=scale)
             badge_rot = badge_canvas.rotate(180)
             img.draw_image(dest_x, dest_y, badge_rot)
@@ -234,16 +248,21 @@ class HUDRenderer:
         # 1. 绘制前向主车道 ROI 参考引导框 (轻量淡蓝色角标)
         roi_x = int(self.config.IMG_WIDTH * self.config.ROI_X_MIN_RATIO)
         roi_w = int(self.config.IMG_WIDTH * (self.config.ROI_X_MAX_RATIO - self.config.ROI_X_MIN_RATIO))
-        roi_y = int(self.config.IMG_HEIGHT * self.config.ROI_Y_MIN_RATIO)
-        roi_h = int(self.config.IMG_HEIGHT * (1.0 - self.config.ROI_Y_MIN_RATIO))
+        if not is_inverted:
+            roi_y = int(self.config.IMG_HEIGHT * self.config.ROI_Y_MIN_RATIO)
+            roi_h = int(self.config.IMG_HEIGHT * (1.0 - self.config.ROI_Y_MIN_RATIO))
+        else:
+            # 倒装模式下，物理路面在图像上方 (y = 0 ~ 1-ROI_Y_MIN_RATIO)
+            roi_y = 0
+            roi_h = int(self.config.IMG_HEIGHT * (1.0 - self.config.ROI_Y_MIN_RATIO))
         img.draw_rect(roi_x, roi_y, roi_w, roi_h, color=self.COLOR_CYAN, thickness=1)
 
         # 2. 绘制实际物理道路左右边界 (Real Road Perception)
         if road_res is not None and getattr(road_res, "detected", False):
-            self.render_actual_road(img, road_res)
+            self.render_actual_road(img, road_res, is_inverted=is_inverted)
 
         # 3. 绘制虚拟车道透视安全地毯 (Lane Corridor Envelope, 支持动态弯道随动)
-        self.render_lane_corridor(img, alerts, yaw_rate_dps=yaw_rate_dps)
+        self.render_lane_corridor(img, alerts, yaw_rate_dps=yaw_rate_dps, is_inverted=is_inverted)
 
         # 4. 绘制每个被跟踪目标与距离/TTC 徽标 (支持倒装模式下整体旋转与文字正向)
         for t_id, target in tracks.items():

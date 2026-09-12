@@ -187,6 +187,45 @@ class TestHUDRenderer(unittest.TestCase):
         self.assertEqual(inverted_rect_calls[0][2], 50)
         self.assertEqual(inverted_rect_calls[0][3], 80)
 
+    def test_inverted_lane_corridor_and_road_tags(self):
+        """
+        [Phase 3 Quality Gate: 车道线刻度与道路感知标签倒装适配断言]
+        验证在 is_inverted=True 时：
+        1. 虚拟车道地毯的 5m, 10m, 20m 刻度线依然调用 draw_line 绘制。
+        2. 刻度文字 (5m, 10m, 20m) 与道路感知标签 ([LANE 90%]) 在倒装模式下被正常处理且渲染调用无异常。
+        """
+        mock_img = MagicMock()
+        from core.road_detector import RoadDetectionResult
+
+        road_res = RoadDetectionResult(
+            detected=True,
+            confidence=0.9,
+            left_boundary_pts=[(150, 470), (190, 400), (230, 330)],
+            right_boundary_pts=[(490, 470), (450, 400), (410, 330)],
+            road_center_offset_px=0.0,
+            road_type="painted_lanes"
+        )
+
+        self.renderer.render_hud(
+            img=mock_img,
+            tracks={},
+            alerts=[],
+            road_res=road_res,
+            is_inverted=True
+        )
+
+        # 验证 draw_line 正常绘制车道走廊及刻度线
+        self.assertTrue(mock_img.draw_line.called)
+        self.assertGreaterEqual(mock_img.draw_line.call_count, 6)
+
+        # 在主机测试环境 (无 maix C 扩展) 下，draw_rotated_text 回退为 draw_string，
+        # 验证刻度文本与道路标签均已进入绘制流水线
+        string_calls = [str(c) for c in mock_img.draw_string.call_args_list]
+        self.assertTrue(any("5m" in c for c in string_calls), "必须绘制 5m 距离刻度！")
+        self.assertTrue(any("10m" in c for c in string_calls), "必须绘制 10m 距离刻度！")
+        self.assertTrue(any("20m" in c for c in string_calls), "必须绘制 20m 距离刻度！")
+        self.assertTrue(any("LANE" in c for c in string_calls), "必须绘制道路感知状态徽章！")
+
 
 if __name__ == '__main__':
     unittest.main()

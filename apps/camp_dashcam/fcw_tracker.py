@@ -270,20 +270,23 @@ class FCWAnalyzer:
         corridor_half_w = getattr(self.config, "LANE_CORRIDOR_HALF_WIDTH_M", 1.35)
         return abs(lateral_x - center_x) <= corridor_half_w
 
-    def estimate_distance(self, bottom_y: float, pitch_deg: float = None) -> float:
+    def estimate_distance(self, bottom_y: float, pitch_deg: float = None, is_inverted: bool = False) -> float:
         """
         根据检测框底边 y 坐标估算目标的实际物理纵向距离 Z (米)。
         支持传入动态俯仰角或默认静态角。
+        当相机倒装 (is_inverted=True) 时，图像在垂直方向倒置，底边接地点与 y 轴方向相反，
+        转换为等效正立像素纵坐标 (img_h - 1 - bottom_y) 进行精确测距。
         """
+        eff_bottom_y = float(self.img_h - 1 - bottom_y) if is_inverted else float(bottom_y)
         p_deg = pitch_deg if pitch_deg is not None else self.current_pitch_deg
         p_rad = math.radians(p_deg)
         horizon_y = self.compute_horizon_y(p_deg)
 
-        if bottom_y <= horizon_y:
+        if eff_bottom_y <= horizon_y:
             # 接地点在真实地平线之上或天空，超出单目路面几何模型范围
             return self.config.MAX_EVAL_DISTANCE_M * 2
 
-        dy = bottom_y - self.y_center
+        dy = eff_bottom_y - self.y_center
         alpha = math.atan(dy / self.fy)
         total_angle = p_rad + alpha
 
@@ -305,7 +308,7 @@ class FCWAnalyzer:
         x_meters = (dx_pixels * distance_z) / self.fx
         return float(x_meters)
 
-    def is_valid_detection(self, det: dict) -> bool:
+    def is_valid_detection(self, det: dict, is_inverted: bool = False) -> bool:
         """
         过滤非关注目标类别与主车道扇区 (ROI) 外的目标。
         """
@@ -313,15 +316,14 @@ class FCWAnalyzer:
         if class_id not in self.config.VALID_CLASSES:
             return False
 
-
         bbox = det.get("bbox", [0, 0, 0, 0])
         x, y, w, h = bbox
         x_center = x + w / 2.0
-        bottom_y = y + h
+        bottom_y = y + h if not is_inverted else y
 
         # 归一化坐标检查
         x_norm = x_center / self.img_w
-        y_norm = bottom_y / self.img_h
+        y_norm = (bottom_y / self.img_h) if not is_inverted else ((self.img_h - 1 - bottom_y) / self.img_h)
 
         if x_norm < self.config.ROI_X_MIN_RATIO or x_norm > self.config.ROI_X_MAX_RATIO:
             return False
@@ -368,21 +370,16 @@ class FCWAnalyzer:
             target.active_alert_level = AlertLevel.NONE
             return AlertLevel.NONE
 
-        if raw_level == AlertLevel.CRITICAL:
-            target.confirm_counter += 1
-            if target.confirm_counter >= required_frames:
-                target.active_alert_level = AlertLevel.CRITICAL
-                return AlertLevel.CRITICAL
-            return AlertLevel.NONE
+        if raw_level == target.active_alert_level:
+            target.confirm_counter = max(target.confirm_counter, required_frames)
+            return target.active_alert_level
 
-        if raw_level == AlertLevel.WARNING:
-            target.confirm_counter += 1
-            if target.confirm_counter >= required_frames:
-                target.active_alert_level = AlertLevel.WARNING
-                return AlertLevel.WARNING
-            return AlertLevel.NONE
+        target.confirm_counter += 1
+        if target.confirm_counter >= required_frames:
+            target.active_alert_level = raw_level
+            return raw_level
 
-        return AlertLevel.NONE
+        return target.active_alert_level
 
     def evaluate_alert_level(self, target: FCWTarget) -> str:
         """
@@ -391,12 +388,13 @@ class FCWAnalyzer:
         raw = self.evaluate_raw_alert_level(target)
         return self.evaluate_debounced_alert_level(target, raw)
 
-    def process_detections(self, detections: list, now_sec: float, yaw_rate_dps: float = 0.0) -> list:
+    def process_detections(self, detections: list, now_sec: float, yaw_rate_dps: float = 0.0, is_inverted: bool = False) -> list:
         """
         处理当前帧检测结果，更新追踪目标并返回告警列表。
         :param detections: list of dict {'track_id': int, 'class_id': int, 'bbox': [x,y,w,h]}
         :param now_sec: 当前时间戳 (秒)
         :param yaw_rate_dps: 偏航角速度 (deg/s), 动态弯道走廊补偿
+        :param is_inverted: 相机是否处于倒放状态
         :return: list of dict [{'level': AlertLevel, 'target': FCWTarget}]
         """
         current_seen_ids = set()
@@ -404,7 +402,7 @@ class FCWAnalyzer:
 
         # 1. 过滤并更新/注册可见目标
         for det in detections:
-            if not self.is_valid_detection(det):
+            if not self.is_valid_detection(det, is_inverted=is_inverted):
                 continue
 
             t_id = det["track_id"]
@@ -412,8 +410,8 @@ class FCWAnalyzer:
             bbox = det["bbox"]
             x, y, w, h = bbox
             bbox_center_x = x + w / 2.0
-            bottom_y = y + h
-            distance = self.estimate_distance(bottom_y)
+            bottom_y = y + h if not is_inverted else y
+            distance = self.estimate_distance(bottom_y, is_inverted=is_inverted)
             lateral_x = self.estimate_lateral_x(bbox_center_x, distance)
 
             current_seen_ids.add(t_id)

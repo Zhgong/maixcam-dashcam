@@ -225,11 +225,12 @@ def main(disp_handle=None):
                     road_res = road_detector.detect_actual_road(
                         cv_img,
                         horizon_y=int(fcw_analyzer.current_horizon_y),
-                        imu_yaw_rate=yaw_rate_dps
+                        imu_yaw_rate=yaw_rate_dps,
+                        is_inverted=is_inverted
                     )
 
             # E. FCW 碰撞与相对逼近速度推算 (内置 EMA 滤波与动态转弯曲率补偿)
-            alerts = fcw_analyzer.process_detections(detections, now_sec=now_sec, yaw_rate_dps=yaw_rate_dps)
+            alerts = fcw_analyzer.process_detections(detections, now_sec=now_sec, yaw_rate_dps=yaw_rate_dps, is_inverted=is_inverted)
 
             # F. 车辆/高价值目标自动快照 (Snapshots)
             for t_id, target in fcw_analyzer.tracks.items():
@@ -299,6 +300,13 @@ def main(disp_handle=None):
 
             if active_disp and img:
                 active_disp.show(img)
+
+            # 定期导出当前画面截图到 /tmp/dashcam_hud_screenshot.jpg 方便调试与效果确认
+            if frame_count % 30 == 0 and img is not None:
+                try:
+                    img.save("/tmp/dashcam_hud_screenshot.jpg")
+                except Exception:
+                    pass
 
 
             # J. 3 分钟自动分段录像轮替与 FIFO 循环清理

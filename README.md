@@ -40,4 +40,5 @@
 
 * 📐 [技术架构与算法规范 (ARCHITECTURE.md)](docs/ARCHITECTURE.md)：包含多线程流水线、单目测距几何公式推导、TTC 碰撞判定矩阵。
 * 🛠️ [开发方法论与 TDD 测试矩阵 (DEVELOPMENT_GUIDE.md)](docs/DEVELOPMENT_GUIDE.md)：包含四阶段开发流水线、无硬件本地仿真策略与边缘测试用例设计。
+* 📋 [项目待办与演进路线 (TODO.md)](TODO.md)：包含英文文档规划与数据流模块化重构任务。
 
