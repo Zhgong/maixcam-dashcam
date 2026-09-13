@@ -93,6 +93,25 @@ class TestTelemetryAndSnapshot(unittest.TestCase):
         should_snap3 = self.snapshot_mgr.should_take_snapshot(target, alert_level=AlertLevel.CRITICAL, now_sec=103.0)
         self.assertTrue(should_snap3, "进入 CRITICAL 紧急预警时应突破常规跟车冷却，立即抓拍！")
 
+        # 4. 4 秒后（升级到 WARNING 且超过 2s）-> 触发告警抓拍
+        should_snap4 = self.snapshot_mgr.should_take_snapshot(target, alert_level=AlertLevel.WARNING, now_sec=106.0)
+        self.assertTrue(should_snap4)
+
+        # 5. 超过 2*cooldown_sec (10s) -> 周期性常规抓拍
+        should_snap5 = self.snapshot_mgr.should_take_snapshot(target, alert_level=AlertLevel.WARNING, now_sec=120.0)
+        self.assertTrue(should_snap5)
+
+    def test_snapshot_save_exception_fallback(self):
+        """
+        验证当图片保存失败抛出异常时，save_snapshot 捕获异常并返回 None。
+        """
+        mock_img = MagicMock()
+        mock_img.save.side_effect = IOError("Flash storage write error")
+        target = FCWTarget(track_id=2, class_id=DashcamConfig.TARGET_CAR, bbox=[100, 100, 50, 50], distance_m=20.0, timestamp=100.0)
+
+        saved = self.snapshot_mgr.save_snapshot(mock_img, target, alert_level=AlertLevel.NONE, now_sec=100.0)
+        self.assertIsNone(saved)
+
     def test_touchscreen_1d_coordinate_parsing(self):
         """
         验证 MaixPy 1D 触控输入格式 [x, y, pressed] 正确解析与退出判据。
@@ -114,6 +133,40 @@ class TestTelemetryAndSnapshot(unittest.TestCase):
         # 空数据/None 输入
         self.assertFalse(parse_touch_exit(None, img_w=640, img_h=480))
         self.assertFalse(parse_touch_exit([], img_w=640, img_h=480))
+
+    def test_telemetry_logger_flush_close_and_error_handling(self):
+        """
+        验证 TelemetryLogger 的 flush, close 以及在文件句柄已关闭时的安全保护
+        """
+        self.logger.flush()
+        self.logger.close()
+        self.assertIsNone(self.logger.file_handle)
+
+        # 再次 close 不应报错
+        self.logger.close()
+
+        # 在 file_handle 为 None 时调用 log_frame 不应报错
+        self.logger.log_frame(
+            timestamp=100.0, fps=30.0, temp_c=50, total_g=1.0, dyn_g=0.1,
+            imu_raw=[0.1, 9.8, 0.2, 0.0, 0.0, 0.0], target_count=1,
+            lead_id=1, lead_dist=15.0, rel_speed=-2.0, ttc=7.5,
+            alert_level=AlertLevel.NONE, is_locked=False
+        )
+
+    def test_telemetry_init_error_and_periodic_snapshot(self):
+        """
+        验证 TelemetryLogger 文件无法打开时的降级处理以及 Snapshot 常规周期抓拍
+        """
+        from unittest.mock import patch
+        with patch('builtins.open', side_effect=IOError("Disk readonly")):
+            logger_fail = TelemetryLogger(log_dir=self.test_dir, config=self.config)
+            self.assertIsNone(logger_fail.file_handle)
+
+        target = FCWTarget(track_id=20, class_id=DashcamConfig.TARGET_CAR, bbox=[100, 100, 50, 50], distance_m=20.0, timestamp=100.0)
+        self.snapshot_mgr.track_history[20] = {"last_time": 100.0, "last_level": AlertLevel.NONE}
+        # 冷却期 5s，经过 11s (>= 2 * cooldown) 且仍为 NONE 告警
+        should = self.snapshot_mgr.should_take_snapshot(target, alert_level=AlertLevel.NONE, now_sec=111.0)
+        self.assertTrue(should)
 
 
 if __name__ == "__main__":

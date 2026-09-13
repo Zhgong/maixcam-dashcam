@@ -226,6 +226,69 @@ class TestHUDRenderer(unittest.TestCase):
         self.assertTrue(any("20m" in c for c in string_calls), "必须绘制 20m 距离刻度！")
         self.assertTrue(any("LANE" in c for c in string_calls), "必须绘制道路感知状态徽章！")
 
+    def test_project_ground_point_near_clamping(self):
+        """
+        验证 z_m <= 0.1 时返回中心点 (cx, cy)
+        """
+        px, py = self.renderer.project_ground_point(0.0, 0.05)
+        self.assertEqual(px, int(self.renderer.cx))
+        self.assertEqual(py, int(self.renderer.cy))
+
+    def test_render_hud_critical_banner_and_paused_recording(self):
+        """
+        验证 CRITICAL 告警横幅渲染以及录像暂停状态 PAUSED 渲染
+        """
+        from core.fcw_tracker import AlertLevel, FCWTarget
+        mock_img = MagicMock()
+        crit_target = FCWTarget(track_id=10, class_id=DashcamConfig.TARGET_CAR, bbox=[200, 200, 80, 80],
+                                distance_m=5.0, timestamp=100.0)
+        crit_target.active_alert_level = AlertLevel.CRITICAL
+        crit_target.ttc_sec = 0.8
+        alerts = [{"level": AlertLevel.CRITICAL, "target": crit_target}]
+
+        self.renderer.render_hud(
+            img=mock_img,
+            tracks={10: crit_target},
+            alerts=alerts,
+            is_recording=False,
+            is_locked=False,
+            is_inverted=False
+        )
+        string_calls = [str(c) for c in mock_img.draw_string.call_args_list]
+        self.assertTrue(any("CRITICAL" in c for c in string_calls), "必须绘制 CRITICAL 告警横幅！")
+        self.assertTrue(any("PAUSED" in c for c in string_calls), "必须绘制 REC [PAUSED] 提示！")
+
+        # 同样验证 WARNING 级别目标框颜色与倒装模式下的 critical 横幅
+        mock_img.reset_mock()
+        warn_target = FCWTarget(track_id=11, class_id=DashcamConfig.TARGET_CAR, bbox=[200, 200, 80, 80],
+                                distance_m=12.0, timestamp=100.0)
+        warn_target.active_alert_level = AlertLevel.WARNING
+        warn_target.ttc_sec = 2.1
+        self.renderer.render_hud(
+            img=mock_img,
+            tracks={11: warn_target},
+            alerts=[{"level": AlertLevel.CRITICAL, "target": crit_target}],
+            is_recording=True,
+            is_locked=True,
+            is_inverted=True
+        )
+        string_calls_inv = [str(c) for c in mock_img.draw_string.call_args_list]
+        self.assertTrue(any("CRITICAL" in c for c in string_calls_inv))
+        self.assertTrue(any("LOCKED" in c for c in string_calls_inv))
+
+    def test_render_actual_road_none_or_not_detected(self):
+        """
+        验证 render_actual_road 在 road_res 为 None 或 detected=False 时直接返回无动作
+        """
+        mock_img = MagicMock()
+        self.renderer.render_actual_road(mock_img, None)
+        self.assertFalse(mock_img.draw_line.called)
+
+        from core.road_detector import RoadDetectionResult
+        res_false = RoadDetectionResult(detected=False)
+        self.renderer.render_actual_road(mock_img, res_false)
+        self.assertFalse(mock_img.draw_line.called)
+
 
 if __name__ == '__main__':
     unittest.main()

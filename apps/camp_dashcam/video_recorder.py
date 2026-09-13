@@ -22,6 +22,7 @@ try:
     from maix import image
     HAS_MAIX_IMAGE = True
 except ImportError:
+    image = None
     HAS_MAIX_IMAGE = False
 
 

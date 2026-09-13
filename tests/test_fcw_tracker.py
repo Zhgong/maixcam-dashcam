@@ -316,6 +316,63 @@ class TestFCWTracker(unittest.TestCase):
         self.assertFalse(changed)
         self.assertFalse(det_up.is_inverted)
 
+    def test_compute_pitch_from_gravity_zero_norm(self):
+        """
+        验证当 xy_norm 为 0 (完全自由落体失重或失真) 时返回 0.0
+        """
+        pitch = FCWAnalyzer.compute_pitch_from_gravity(0.0, 0.0, 0.0)
+        self.assertEqual(pitch, 0.0)
+
+    def test_evaluate_alert_level_legacy_and_debounce_branches(self):
+        """
+        验证 evaluate_alert_level 封装以及 evaluate_debounced_alert_level 相同级别计数维持与 ROI 过滤
+        """
+        target = FCWTarget(track_id=1, class_id=DashcamConfig.TARGET_CAR, bbox=[300, 300, 50, 50],
+                           distance_m=10.0, timestamp=100.0)
+        # 验证初始帧
+        self.assertEqual(target.confirm_counter, 0)
+        # 强制设置 active_alert_level 为 WARNING，再次收到 WARNING 应该触发 confirm_counter 维持
+        target.active_alert_level = AlertLevel.WARNING
+        lvl = self.analyzer.evaluate_debounced_alert_level(target, AlertLevel.WARNING)
+        self.assertEqual(lvl, AlertLevel.WARNING)
+        self.assertGreaterEqual(target.confirm_counter, self.config.DEBOUNCE_CONFIRM_FRAMES)
+
+        # 验证 is_valid_detection 对非法类别、横向越界、纵向太高的过滤
+        invalid_class_det = {"track_id": 2, "class_id": 999, "bbox": [100, 100, 50, 50]}
+        self.assertFalse(self.analyzer.is_valid_detection(invalid_class_det))
+
+        # 验证 ROI_X 越界 (太靠左)
+        out_of_roi_x = {"track_id": 3, "class_id": DashcamConfig.TARGET_CAR, "bbox": [-50, 300, 20, 20]}
+        self.assertFalse(self.analyzer.is_valid_detection(out_of_roi_x))
+
+        # 验证 ROI_Y 越界 (太靠天空)
+        out_of_roi_y = {"track_id": 4, "class_id": DashcamConfig.TARGET_CAR, "bbox": [320, 20, 20, 20]}
+        self.assertFalse(self.analyzer.is_valid_detection(out_of_roi_y))
+
+        # 验证直接调用 evaluate_alert_level
+        eval_lvl = self.analyzer.evaluate_alert_level(target)
+        self.assertIn(eval_lvl, [AlertLevel.NONE, AlertLevel.WARNING, AlertLevel.CRITICAL])
+
+    def test_evaluate_raw_alert_level_warning_and_detections_filtering(self):
+        """
+        验证 evaluate_raw_alert_level 触发 WARNING 判定分支与 process_detections 过滤
+        """
+        target = FCWTarget(track_id=10, class_id=DashcamConfig.TARGET_CAR, bbox=[300, 300, 50, 50],
+                           distance_m=12.0, timestamp=100.0)
+        target.in_lane_corridor = True
+        target.lateral_v_mps = 0.0
+        target.lateral_x_m = 0.0
+        target.ttc_sec = 2.2  # < WARNING_TTC_SEC (3.0s) 且 <= WARNING_DISTANCE_M (20.0m)
+        raw_lvl = self.analyzer.evaluate_raw_alert_level(target)
+        self.assertEqual(raw_lvl, AlertLevel.WARNING)
+
+        # 触发 process_detections 中对无效目标的过滤分支
+        detections = [
+            {"track_id": 99, "class_id": 999, "bbox": [10, 10, 20, 20]}
+        ]
+        alerts = self.analyzer.process_detections(detections, now_sec=100.0)
+        self.assertEqual(len(alerts), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

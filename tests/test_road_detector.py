@@ -76,6 +76,70 @@ class TestRoadDetector(unittest.TestCase):
         self.assertFalse(result.detected)
         self.assertLess(result.confidence, 0.3)
 
+    def test_single_edge_recovery_left_only(self):
+        """
+        验证仅左侧标线清晰时，系统自动依据预设车道宽度先验补全右侧标线。
+        """
+        h, w = 480, 640
+        img = np.full((h, w, 3), 60, dtype=np.uint8)
+        horizon_y = 300
+        # 仅绘制左线
+        cv2.line(img, (160, 460), (280, horizon_y), (240, 240, 240), thickness=6)
+
+        result: RoadDetectionResult = self.detector.detect_actual_road(img, horizon_y=horizon_y, imu_yaw_rate=0.0)
+        self.assertTrue(result.detected)
+        self.assertGreaterEqual(len(result.right_boundary_pts), 3, "右边界必须被先验模型成功补全！")
+        self.assertGreater(result.right_boundary_pts[0][0], result.left_boundary_pts[0][0])
+
+    def test_single_edge_recovery_right_only(self):
+        """
+        验证仅右侧标线清晰时，系统自动补齐左侧标线。
+        """
+        h, w = 480, 640
+        img = np.full((h, w, 3), 60, dtype=np.uint8)
+        horizon_y = 300
+        # 仅绘制右线
+        cv2.line(img, (480, 460), (360, horizon_y), (240, 240, 240), thickness=6)
+
+        result: RoadDetectionResult = self.detector.detect_actual_road(img, horizon_y=horizon_y, imu_yaw_rate=0.0)
+        self.assertTrue(result.detected)
+        self.assertGreaterEqual(len(result.left_boundary_pts), 3, "左边界必须被先验模型成功补全！")
+        self.assertLess(result.left_boundary_pts[0][0], result.right_boundary_pts[0][0])
+
+    def test_overexposed_and_empty_images(self):
+        """
+        验证纯白过曝图像与空数组的保护逻辑。
+        """
+        white_img = np.full((480, 640, 3), 255, dtype=np.uint8)
+        res_white = self.detector.detect_actual_road(white_img, horizon_y=300)
+        self.assertFalse(res_white.detected)
+
+        empty_img = np.array([])
+        res_empty = self.detector.detect_actual_road(empty_img, horizon_y=300)
+        self.assertFalse(res_empty.detected)
+
+        # 单通道灰度图支持
+        gray_img = np.full((480, 640), 60, dtype=np.uint8)
+        cv2.line(gray_img, (160, 460), (280, 300), 240, thickness=6)
+        cv2.line(gray_img, (480, 460), (360, 300), 240, thickness=6)
+        res = self.detector.detect_actual_road(gray_img, horizon_y=240)
+        self.assertIsInstance(res, RoadDetectionResult)
+
+    def test_detect_actual_road_inverted_mode(self):
+        """
+        验证倒装模式 (is_inverted=True) 下的路面 ROI 提取与道路检测
+        """
+        img = np.ones((480, 640, 3), dtype=np.uint8) * 80
+        # 在顶部区域 (倒装模式的路面区域) 绘制两条车道线
+        cv2.line(img, (180, 50), (280, 200), (255, 255, 255), 6)
+        cv2.line(img, (460, 50), (360, 200), (255, 255, 255), 6)
+
+        res = self.detector.detect_actual_road(img, horizon_y=220, imu_yaw_rate=2.0, is_inverted=True)
+        self.assertIsInstance(res, RoadDetectionResult)
+        if res.detected:
+            self.assertGreater(len(res.left_boundary_pts), 0)
+            self.assertGreater(len(res.right_boundary_pts), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

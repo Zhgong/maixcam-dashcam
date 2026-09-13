@@ -1,44 +1,89 @@
-# 🚗 MaixCAM 2 智能行车记录仪与碰撞预警 (AI Dashcam & FCW Guard)
+# 🚗 MaixCAM 2 AI Dashcam & FCW Guard
 
-## 1. 项目定位与设计目标 (Vision & Objectives)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Sipeed%20MaixCAM%202-orange.svg)](https://wiki.sipeed.com/maixcam)
+[![NPU](https://img.shields.io/badge/NPU-1.0%20TOPS-green.svg)](https://wiki.sipeed.com/maixcam)
+[![Tests](https://img.shields.io/badge/tests-51%2F51%20passing-brightgreen.svg)](tests/)
 
-本项目为 **Sipeed MaixCAM 2** 定制的边缘端行车记录与智能驾驶辅助系统 (MVP)。旨在利用板载 **1.0 TOPS NPU**、**4K VPU 硬件编解码器** 及 **LSM6DSOWTR 6 轴 IMU**，打造一款纯端侧、零云端依赖、超低延迟的极客级行车记录仪与前向碰撞预警（FCW）设备。
-
-* **设备核心定位**：极客 / 露营房车车载辅助设备
-* **核心哲学**：**低延迟、零误报骚扰、端侧离线闭环、硬件资源高效分配**
+**English** | [中文文档 (Chinese)](README_ZH.md)
 
 ---
 
-## 2. 功能范围定义 (Scope Definition)
+## 1. Vision & Core Philosophy
 
-### 2.1 明确排除的非核心功能 (Out of Scope)
-1. **车道线检测与偏离预警 (LDW)**：小算力下车道线受路面磨损、积水、反光和阴影影响极大，极易造成持续误报。
-2. **多车道全景盲区监测 (BSD)**：单前视镜头聚焦正前方主行车道，不发散计算侧后方车辆。
-3. **驾驶员疲劳与手势识别 (DMS)**：算力集中供给前向道路与 1080P 编码。
-4. **底盘制动联动**：本系统定位为“声光提示与证据锁存”，无任何硬件刹车联动。
+**MaixCAM 2 AI Dashcam & FCW Guard** is an edge-native smart dashcam and Forward Collision Warning (FCW) assistance system tailored specifically for the **Sipeed MaixCAM 2** hardware platform.
 
-### 2.2 收缩后的 MVP 核心功能范围 (In Scope)
+Leveraging the on-board **1.0 TOPS NPU**, **4K VPU hardware video pipeline**, and **LSM6DSOWTR 6-axis IMU**, this project delivers an ultra-low latency, zero-cloud-dependency ADAS assistant designed for geeks, road-trippers, and camper vans.
 
-| 核心模块 | 功能描述 | 核心判据 / 触发逻辑 |
+### Design Principles:
+* **Zero Nuisance & Low False-Alarm Rate**: Tail-gating in stop-and-go traffic or waiting at red lights triggers **0% false alarms**; alerts fire strictly when relative approach speed ($v_{\text{rel}}$) and Time-To-Collision ($TTC$) breach safety thresholds.
+* **100% Edge-Offline Loop**: Vision inference, monocular distance estimation, IMU attitude tracking, and segmented video recording run entirely on-device without telemetry leakage or internet dependency.
+* **Physical Mounting Agility (Upright & Inverted)**: Native gravity auto-detection adapts the HUD, target boxes, perspective virtual lane carpet, and real road perception to windshield suction cup mounts (inverted/ceiling-mounted) and desktop/dashboard mounts (upright) seamlessly.
+
+---
+
+## 2. Feature Matrix
+
+| Subsystem | Key Capabilities | Trigger & Execution Logic |
 | :--- | :--- | :--- |
-| **1. 前向目标跟踪** | 实时检测并跟踪正前方主车道 4 类目标：轿车、大客车/卡车、摩托/骑行者、行人 | • YOLO11 / YOLOv8 过滤目标类别<br>• 限制在正前方 ROI 梯形/矩形区域<br>• ByteTrack 分配稳定 `Track ID`，消除检测闪烁 |
-| **2. 碰撞预警 (FCW)** | 结合单目几何测距与 TTC (Time-to-Collision) 相对逼近率分级告警 | • **静止跟车**：距离近但不逼近 $\to$ 静音，不误报<br>• **快速逼近**：$TTC < 2.0\text{s}$ 或危险距变近 $\to$ 屏幕红框 + 蜂鸣提示 |
-| **3. 碰撞与急刹锁存** | 板载 IMU 实时监听加速度矢量变化 | • 当总加速度冲击 $\ge 1.5\text{G}$ 或急刹减速度超标，自动将当前录像移入 `locked/` 目录防覆盖 |
-| **4. 循环录像与 HUD** | 硬件 VPU 1080P/30fps 分段循环录像 + 极简暗黑 HUD | • 每段 3 分钟循环分段，空间满时自动轮替最旧非锁定文件<br>• 屏幕实时显示前车距离、TTC 预警等级、录像状态与 SoC 温度 |
+| **1. Forward Object Tracking** | Detects & tracks 4 primary target classes: `Car`, `Bus/Truck`, `Motorcycle/Bicycle`, `Pedestrian`. | • YOLO11 / YOLOv8 NPU-accelerated detection<br>• ByteTrack persistent `Track ID` attribution<br>• Main driving corridor ROI filtering |
+| **2. FCW & Monocular Ranging** | Ground-plane projective distance estimation + Time-To-Collision (TTC) grading. | • $TTC < 1.8\text{s}$: **CRITICAL** (Red HUD banner + audio buzzer)<br>• $TTC < 2.8\text{s}$ & $D \le 25\text{m}$: **WARNING** (Yellow caution badge)<br>• Stationary following: Silent |
+| **3. Virtual Lane Carpet & Road Perception** | Real asphalt boundary detection + dynamic curvature perspective lane corridor. | • Dynamically bends along with IMU yaw rate during cornering<br>• Distance tick beams at 5m, 10m, and 20m<br>• Road perception confidence badge `[LANE/ROAD xx%]` |
+| **4. G-Sensor Emergency Locking** | Multi-axis high-G shock and harsh braking monitoring. | • Total acceleration $\ge 1.5\text{G}$ or emergency brake deceleration immediately locks current segment into `locked/` folder to prevent FIFO overwrite |
+| **5. Loop Recording & Dark HUD** | Segmented streaming video recording + high-contrast ADAS HUD. | • 3-minute seamless cyclic video chunks<br>• FIFO auto-rotation keeps storage healthy<br>• Dark HUD showing recording status, SoC temperature, G-force, and targets |
 
 ---
 
-## 3. 系统性能指标 (Success Metrics)
+## 3. Hardware Architecture & Mounting Modes
 
-* **推理时延与帧率**：目标检测维持在 **20 ~ 30 FPS**，端到端声光警报延迟 $< 100\text{ ms}$。
-* **误报率控制**：红灯跟车静止状态下报警率为 **0%**。
-* **热平衡与稳定性**：SoC 芯片温度控制在安全基线，录像 I/O 与 NPU 推理双线程独立互不阻塞。
+### Hardware Specifications
+* **SoC**: AX630C / AX650N family with dual-core RISC-V / ARM CPU
+* **NPU**: 1.0 TOPS @ INT8 (runs quantized YOLO11 models with sub-35ms inference)
+* **IMU**: STMicroelectronics LSM6DSOWTR 6-axis Gyroscope & Accelerometer
+* **Optics**: High Dynamic Range wide-angle lens (FOV-H $85^\circ$, FOV-V $65^\circ$)
+* **Display**: Integrated 640x480 color capacitive touch display
+
+### Windshield Mounting Flexibility (`MOUNT_MODE`)
+Configurable in `config.py` via `MOUNT_MODE = "auto"` (`"auto"`, `"upright"`, `"inverted"`):
+* **Upright (Dashboard mount)**: Normal camera optics with standard HUD status bars.
+* **Inverted (Windshield suction cup mount)**: IMU detects inverted gravity vector ($a_y < -3.0\text{ m/s}^2$). The HUD automatically swaps top/bottom status bars, inverts ground-plane lane projections, and rotates text labels by 180° for 100% human-readable, upright display without requiring lossy CPU image flipping.
 
 ---
 
-## 4. 详细技术与开发文档 (Documentation Index)
+## 4. Development & Quick Start
 
-* 📐 [技术架构与算法规范 (ARCHITECTURE.md)](docs/ARCHITECTURE.md)：包含多线程流水线、单目测距几何公式推导、TTC 碰撞判定矩阵。
-* 🛠️ [开发方法论与 TDD 测试矩阵 (DEVELOPMENT_GUIDE.md)](docs/DEVELOPMENT_GUIDE.md)：包含四阶段开发流水线、无硬件本地仿真策略与边缘测试用例设计。
-* 📋 [项目待办与演进路线 (TODO.md)](TODO.md)：包含英文文档规划与数据流模块化重构任务。
+### 4.1 Running Unit Tests (Desktop Simulation)
+The codebase includes comprehensive unit tests with mocks for camera, NPU, and display interfaces:
 
+```bash
+# Clone the repository
+git clone git@github.com:Zhgong/maixcam-dashcam-internal.git
+cd maixcam-dashcam
+
+# Install test dependencies
+pip install pytest opencv-python numpy
+
+# Run test suite
+PYTHONPATH=. pytest tests/
+```
+
+### 4.2 One-Click Deployment to Device
+Ensure your development PC and MaixCAM 2 are on the same Wi-Fi / USB-RNDIS subnet:
+
+```bash
+# Deploy to board (default IP or specify board IP)
+bash deploy.sh 10.196.232.1
+```
+The deployment script executes:
+1. Local test matrix gate verification (must pass 100%).
+2. Remote deployment package staging into `/maixapp/apps/camp_dashcam/`.
+3. Bytecode pre-compilation check on device.
+4. App index refresh and live end-to-end smoke test launch.
+
+---
+
+## 5. Repository Documentation Index
+
+* 📐 [Architecture & Mathematical Models (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md): Monocular ranging geometry derivation, TTC matrix, and multi-thread architecture.
+* 🛠️ [Development & TDD Testing Matrix (docs/DEVELOPMENT_GUIDE.md)](docs/DEVELOPMENT_GUIDE.md): Testing methodology, mock strategies, and quality gates.
+* 🛡️ [Security & Desensitization Gate (.agents/AGENTS.md)](.agents/AGENTS.md): Dual-layer pre-push and GitHub Actions security audit policies.

@@ -89,6 +89,33 @@ class TestStorageManager(unittest.TestCase):
         self.assertTrue(os.path.exists(locked_file1))
         self.assertTrue(os.path.exists(locked_file2))
 
+    def test_lock_video_non_existent_file_raises(self):
+        """
+        验证 lock_video 对不存在的文件抛出 FileNotFoundError
+        """
+        non_existent = os.path.join(self.manager.normal_dir, "ghost_video.mp4")
+        with self.assertRaises(FileNotFoundError):
+            self.manager.lock_video(non_existent)
+
+    def test_get_normal_files_when_dir_missing(self):
+        """
+        验证当 normal 目录不存在时返回空列表
+        """
+        shutil.rmtree(self.manager.normal_dir)
+        files = self.manager.get_normal_files()
+        self.assertEqual(files, [])
+
+    def test_enforce_quota_deletion_error_handling(self):
+        """
+        验证当某个文件删除遇到 OSError 时，能够优雅捕获而不崩溃并继续
+        """
+        from unittest.mock import patch
+        path = os.path.join(self.manager.normal_dir, "to_delete.mp4")
+        with open(path, "w") as f: f.write("dummy")
+        with patch('os.remove', side_effect=OSError("Permission denied")):
+            deleted = self.manager.enforce_quota(max_normal_files=0)
+            self.assertEqual(deleted, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

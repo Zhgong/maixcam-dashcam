@@ -172,6 +172,75 @@ class TestVideoRecorder(unittest.TestCase):
         self.assertEqual(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 15)
         cap.release()
 
+    @patch('cv2.VideoWriter')
+    def test_video_writer_initialization_failure_fallback(self, mock_writer_cls):
+        """
+        验证当底层硬件编解码器或 OpenCV 初始化异常抛错时，VideoRecorder 优雅降级不崩溃。
+        """
+        mock_writer_cls.side_effect = RuntimeError("Hardware VPU busy")
+        recorder = VideoRecorder(storage_manager=self.storage_mgr, config=self.config)
+        path = recorder.start_segment(now_sec=100.0)
+        self.assertIsNone(recorder.writer)
+        self.assertEqual(recorder.state, RecorderState.RECORDING)
+
+        # 在无 writer 状态下写入帧，应平稳计数并返回
+        dummy_frame = np.zeros((self.config.IMG_HEIGHT, self.config.IMG_WIDTH, 3), dtype=np.uint8)
+        recorder.write_frame(dummy_frame)
+        self.assertEqual(recorder.recorded_frames, 1)
+
+        # 封包时无 writer
+        final_path = recorder.finalize_current_segment()
+        self.assertEqual(final_path, path)
+
+    @patch('os.sync')
+    def test_video_recorder_periodic_sync(self, mock_sync):
+        """
+        验证当写入帧数达到 SYNC_INTERVAL_FRAMES 时自动触发 os.sync 刷写底层闪存。
+        """
+        self.recorder.start_segment(now_sec=100.0)
+        dummy_frame = np.zeros((self.config.IMG_HEIGHT, self.config.IMG_WIDTH, 3), dtype=np.uint8)
+        for _ in range(30):
+            self.recorder.write_frame(dummy_frame)
+
+        self.assertTrue(mock_sync.called, "达到 30 帧必须触发底层物理刷盘 os.sync()！")
+
+    def test_video_recorder_write_with_maix_image_mock(self):
+        """
+        验证 maix.image.Image 硬件图像类型能被正常转换为 cv2 格式并写入。
+        """
+        self.recorder.start_segment(now_sec=100.0)
+        mock_img = MagicMock()
+        mock_img.format = 1
+        raw_rgb = np.zeros((self.config.IMG_HEIGHT, self.config.IMG_WIDTH, 3), dtype=np.uint8)
+
+        with patch('core.video_recorder.HAS_MAIX_IMAGE', True), \
+             patch('core.video_recorder.image') as mock_maix_image:
+            mock_maix_image.image2cv.return_value = raw_rgb
+            self.recorder.write_frame(mock_img)
+
+        self.assertEqual(self.recorder.recorded_frames, 1)
+
+    def test_video_recorder_rotate_when_stopped_and_close(self):
+        """
+        验证当处于 STOPPED 状态时调用 check_and_rotate 自动启动新分段，以及 close 安全退出
+        """
+        self.assertEqual(self.recorder.state, RecorderState.STOPPED)
+        rotated, path = self.recorder.check_and_rotate(now_sec=200.0)
+        self.assertTrue(rotated)
+        self.assertIsNotNone(path)
+        self.assertEqual(self.recorder.state, RecorderState.RECORDING)
+
+        # 验证 close
+        self.recorder.close()
+        self.assertEqual(self.recorder.state, RecorderState.STOPPED)
+
+    def test_video_recorder_finalize_empty_path(self):
+        """
+        验证未初始化 current_file_path 时 finalize_current_segment 返回 None
+        """
+        recorder = VideoRecorder(storage_manager=self.storage_mgr, config=self.config)
+        self.assertIsNone(recorder.finalize_current_segment())
+
 
 if __name__ == "__main__":
     unittest.main()
